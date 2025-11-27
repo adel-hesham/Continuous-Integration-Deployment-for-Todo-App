@@ -5,7 +5,7 @@ const User = require('../models/register');
 module.exports.alltask = function(req, res){
     const data = Dashboard.find({})
     .then(function(data){
-        User.findOne({email : "ankitvis609@gmail.com"})
+        User.findOne({email : "harrypotter@gmail.com"})
         .then(function(user){
             console.log(`**********user`, user.name);
         return res.render('alltask', {
