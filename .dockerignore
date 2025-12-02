@@ -1,0 +1,21 @@
+# Dependencies (Install these inside the image instead)
+node_modules
+npm-debug.log
+
+# Git metadata
+.git
+.gitignore
+
+# Environment variables 
+.env
+
+# Docker & Kubernetes orchestration files
+docker-compose.yml
+dockerfile
+Dockerfile
+k8s
+k8s.zip
+
+# Documentation
+README.md
+REDME.txt
