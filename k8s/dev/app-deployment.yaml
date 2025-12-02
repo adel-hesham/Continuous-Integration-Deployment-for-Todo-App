@@ -1,20 +1,46 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: myapp
+  name: todoapp
   namespace: dev
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
-      app: myapp
+      app: todoapp
   template:
     metadata:
       labels:
-        app: myapp
+        app: todoapp
     spec:
       containers:
-        - name: myapp
-          image: nginxdemos/hello:latest
-          ports:
-          - containerPort: 80
+      - name: todoapp
+        image: fatmahashem/todo-app:latest #change to nexus
+        ports:
+        - containerPort: 4000
+        env:
+        - name: PORT
+          value: "4000"
+        - name: mongoDbUrl
+          value: "mongodb+srv://ankitvis609:Sonu135790@cluster0.esi3ulq.mongodb.net/todolistDb"
+        - name: NODE_ENV
+          value: "development"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 4000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 4000
+          initialDelaySeconds: 5
+          periodSeconds: 5
