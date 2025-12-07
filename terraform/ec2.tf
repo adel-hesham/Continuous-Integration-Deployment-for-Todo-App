@@ -95,6 +95,13 @@ resource "aws_security_group" "nexus_ec2_sg" {
     description = "Allow nexus"
   }
   ingress {
+    from_port   = 5000
+    to_port     = 5000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow http docker-container-registry"
+  }
+  ingress {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"

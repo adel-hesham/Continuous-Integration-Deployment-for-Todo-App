@@ -3,7 +3,7 @@ output "vpc_name" {
 }
 
 output "nexus_ec2_private_ip" {
-  value = aws_instance.my_nginx_ec2.private_ip
+  value = aws_instance.my_nexus_ec2.private_ip
 }
 output "basion_host_ec2_public_dns" {
   value = aws_instance.basion_host_ec2.public_dns

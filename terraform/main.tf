@@ -235,7 +235,6 @@ resource "aws_iam_role_policy_attachment" "amazon_ec2_container_registry_read_on
 
 resource "aws_eks_node_group" "general" {
   cluster_name    = aws_eks_cluster.eks.name
-  version         = local.eks_version
   node_group_name = "general"
   node_role_arn   = aws_iam_role.nodes.arn
 
@@ -245,7 +244,6 @@ resource "aws_eks_node_group" "general" {
   ]
 
   capacity_type  = "ON_DEMAND"
-  instance_types = ["c7i-flex.large"]
 
   scaling_config {
     desired_size = 1
@@ -271,26 +269,69 @@ resource "aws_eks_node_group" "general" {
   lifecycle {
     ignore_changes = [scaling_config[0].desired_size]
   }
+
+    launch_template {
+    id      = aws_launch_template.eks_nodes.id
+    version = "$Latest"
+    }
+  
 }
-resource "null_resource" "import_k8s_lb_sg" {
-  provisioner "local-exec" {
-    command = <<EOT
-# Detect the K8s LB security group
-SG_ID=$(aws ec2 describe-security-groups \
-  --filters "Name=tag:kubernetes.io/cluster/solar-system-application,Values=owned" \
-            "Name=description,Values='Security group for Kubernetes ELB*'" \
-  --query 'SecurityGroups[0].GroupId' --output text)
 
-# Import it into Terraform state if exists
-if [ "$SG_ID" != "None" ]; then
-  terraform import aws_security_group.k8s_lb_sg $SG_ID
-fi
-EOT
-    interpreter = ["/bin/bash", "-c"]
-  }
+# 1. Get the latest AMI ID dynamically
+data "aws_ssm_parameter" "eks_ami" {
+  # New path for Amazon Linux 2023
+  name = "/aws/service/eks/optimized-ami/${local.eks_version}/amazon-linux-2023/x86_64/standard/recommended/image_id"
+}
 
-  # Run only on destroy
-  triggers = {
-    always_run = "${timestamp()}"
-  }
+resource "aws_launch_template" "eks_nodes" {
+  name_prefix   = "eks-node-"
+  image_id      = data.aws_ssm_parameter.eks_ami.value
+  instance_type = "t3.medium"
+
+  # AL2023 requires explicit cluster details in User Data if you override it
+  user_data = base64encode(<<-EOT
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
+
+--==MYBOUNDARY==
+Content-Type: application/node.eks.aws
+Content-Transfer-Encoding: 8bit
+
+---
+apiVersion: node.eks.aws/v1alpha1
+kind: NodeConfig
+spec:
+  cluster:
+    name: ${aws_eks_cluster.eks.name}
+    apiServerEndpoint: ${aws_eks_cluster.eks.endpoint}
+    certificateAuthority: ${aws_eks_cluster.eks.certificate_authority[0].data}
+    cidr: ${aws_eks_cluster.eks.kubernetes_network_config[0].service_ipv4_cidr}
+
+--==MYBOUNDARY==
+Content-Type: text/x-shellscript; charset="us-ascii"
+
+#!/bin/bash
+set -ex
+
+# 1. Define Nexus IP/Port
+NEXUS_HOST="${local.nexus_private_ip}"
+NEXUS_PORT="${local.http_port}"
+
+# 2. Create the hosts.toml for containerd (The AL2023 way)
+mkdir -p "/etc/containerd/certs.d/${local.nexus_private_ip}:${local.http_port}"
+
+cat <<EOF > "/etc/containerd/certs.d/${local.nexus_private_ip}:${local.http_port}/hosts.toml"
+server = "http://${local.nexus_private_ip}:${local.http_port}"
+
+[host."http://${local.nexus_private_ip}:${local.http_port}"]
+  capabilities = ["pull", "resolve"]
+  skip_verify = true
+EOF
+
+# 3. Restart containerd to apply changes
+systemctl restart containerd
+
+--==MYBOUNDARY==--
+  EOT
+  )
 }

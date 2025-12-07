@@ -25,10 +25,12 @@
 # }
 
 locals {
-  vpc_cidr_block = "10.0.0.0/16"
-  region         = "us-east-1"
-  AZ1            = "us-east-1a"
-  AZ2            = "us-east-1b"
-  eks_name       = "solar-system-application"
-  eks_version    = "1.33"
+  vpc_cidr_block   = "10.0.0.0/16"
+  region           = "us-east-1"
+  AZ1              = "us-east-1a"
+  AZ2              = "us-east-1b"
+  eks_name         = "solar-system-application"
+  eks_version      = "1.33"
+  nexus_private_ip = aws_instance.my_nexus_ec2.private_ip
+  http_port        = 5000
 }

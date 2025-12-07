@@ -6,9 +6,9 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  ingressClassName: nginx
+  ingressClassName: external-nginx
   rules:
-    - host: todoapp.dev.local
+    - host: ae34a3d41fb9d41c78b260ff71529fc9-110217650.us-east-1.elb.amazonaws.com
       http:
         paths:
           - path: /
