@@ -8,8 +8,18 @@
       - /nexus-ebs/sonatype-work
   
   tasks:
-    - name: mount ebs
-      script: ./mountebs.sh
+    - name: make file system for ebs
+      filesystem:
+        fstype: ext4
+        force: no
+        dev: /dev/xvdf
+   
+    - name: mount the ebs 
+      mount:
+        path: /nexus-ebs
+        src: /dev/xvdf
+        state: mounted
+        fstype: ext4
 
     - name: Update apt cache
       apt:

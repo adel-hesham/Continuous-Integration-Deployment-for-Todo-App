@@ -139,61 +139,6 @@ resource "aws_instance" "my_nexus_ec2" {
     #!/bin/bash
     sudo snap install amazon-ssm-agent --classic
     sudo systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service
-
-    # 1. Install Java & Utilities
-    apt-get update -y
-    apt-get install -y openjdk-17-jdk wget
-
-    # 2. SAFE MOUNTING OF EBS VOLUME (The Critical Part)
-    # We check if the disk has data. If yes, we mount it. If no, we format it.
-    DEVICE="/dev/xvdf"
-    MOUNT_POINT="/nexus-ebs"
-
-    echo "🔍 Checking device $DEVICE..."
-    mkdir -p $MOUNT_POINT
-
-    # Check if device has a file system already
-    if ! blkid $DEVICE; then
-        echo "⚠️  Disk is empty (First Run). error"
-        exit 1
-    else
-        echo "✅ Disk has data. Skipping format to save your files."
-    fi
-
-    # Mount and add to fstab for persistence
-    mount $DEVICE $MOUNT_POINT
-    echo "$DEVICE $MOUNT_POINT ext4 defaults,nofail 0 2" >> /etc/fstab
-
-    # 4. Create User & Permissions
-    # We create the user on the OS every time, because the OS is new.
-    id -u nexus &>/dev/null || useradd -r -d $MOUNT_POINT/nexus -s /bin/bash nexus
-    chown -R nexus:nexus $MOUNT_POINT
-
-    # 6. Create Systemd Service
-    cat <<EOT > /etc/systemd/system/nexus.service
-    [Unit]
-    Description=nexus service
-    After=network.target
-
-    [Service]
-    Type=forking
-    LimitNOFILE=65536
-    ExecStart=$MOUNT_POINT/nexus/bin/nexus start
-    ExecStop=$MOUNT_POINT/nexus/bin/nexus stop
-    User=nexus
-    Restart=on-abort
-
-    [Install]
-    WantedBy=multi-user.target
-    EOT
-
-    # 7. Start Nexus
-    systemctl daemon-reload
-    systemctl enable nexus
-    systemctl start nexus
-
-    echo "✅ INSTALLATION COMPLETE!"
-
   
   EOF
 
