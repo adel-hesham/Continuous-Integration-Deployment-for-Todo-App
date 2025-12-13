@@ -29,7 +29,7 @@ locals {
   region           = "us-east-1"
   AZ1              = "us-east-1a"
   AZ2              = "us-east-1b"
-  eks_name         = "solar-system-application"
+  eks_name         = "todo-application"
   eks_version      = "1.33"
   nexus_private_ip = aws_instance.my_nexus_ec2.private_ip
   http_port        = 5000
