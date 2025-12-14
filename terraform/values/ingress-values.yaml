@@ -1,7 +1,0 @@
-controller:
-  ingressClassResource:
-    name: external-nginx
-  service:
-    annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: "classic"
-      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
