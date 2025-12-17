@@ -14,14 +14,14 @@ spec:
     spec:
       containers:
       - name: todoapp
-        image: 10.0.76.98:5000/test_todo_app:latest #change to nexus
+        image: "NEXUS_IP_PLACEHOLDER:5000/todo-app:latest" #change to nexus
         ports:
         - containerPort: 4000
         env:
         - name: PORT
           value: "4000"
         - name: mongoDbUrl
-          value: "mongodb+srv://ankitvis609:Sonu135790@cluster0.esi3ulq.mongodb.net/todolistDb"
+          value: "DB_URI_PLACEHOLDER"
         - name: NODE_ENV
           value: "development"
         resources:
