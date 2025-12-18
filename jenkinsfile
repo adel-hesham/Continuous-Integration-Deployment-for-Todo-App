@@ -72,10 +72,13 @@ pipeline {
                                 --query "Reservations[0].Instances[0].InstanceId" --output text)
                             echo "Targeting: \$TARGET_ID"
                             
-                            echo "--- 2. Opening SSM Tunnel ---"
+                            echo "--- 2. Opening SSM Tunnel (Internal Port 5001) ---"
                             nohup aws ssm start-session --target \$TARGET_ID \
                                 --document-name AWS-StartPortForwardingSession \
-                                --parameters '{"portNumber":["5000"],"localPortNumber":["5000"]}' > ssm_final.log 2>&1 &
+                                --parameters '{"portNumber":["5000"],"localPortNumber":["5001"]}' > ssm_final.log 2>&1 &
+                            
+                            echo "--- 3. Starting Socat Bridge (5000 -> 5001) ---"
+                            nohup socat TCP-LISTEN:5000,fork,bind=0.0.0.0 TCP:127.0.0.1:5001 &
                             
                             echo "Waiting for tunnel..."
                             sleep 15
@@ -88,7 +91,7 @@ pipeline {
                             docker tag ${env.LOCAL_IMAGE} 127.0.0.1:5000/${env.LOCAL_IMAGE}
                             docker push 127.0.0.1:5000/${env.LOCAL_IMAGE}
                             
-                            echo "✅ SUCCESS!!"
+                            echo "SUCCESS!!"
                         """
                     }
                 }
@@ -96,6 +99,94 @@ pipeline {
             post {
                 always {
                     sh "pkill -f 'aws ssm start-session' || true"
+                }
+            }
+        }
+        stage('Deploy to EKS') {
+            steps {
+                script {
+                    def targetEnv = (env.BRANCH_NAME == 'main') ? 'prod' : 'dev'
+                    
+                    echo "=============================================="
+                    echo "    DEPLOYING TO ENVIRONMENT: ${targetEnv}    "
+                    echo "=============================================="
+
+                    withCredentials([
+                        [$class: 'AmazonWebServicesCredentialsBinding', 
+                            credentialsId: 'aws-cred', 
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID', 
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'],
+                        usernamePassword(credentialsId: 'nexus-secret', 
+                            usernameVariable: 'NEX_USER', 
+                            passwordVariable: 'NEX_PASS'),
+                        string(credentialsId: 'db-uri-secret', variable: 'DB_CONN_STRING')
+                    ]) {
+                        echo "--- Fetching Nexus Private IP ---"
+                        def NEXUS_IP_VAL = sh(
+                            script: "aws ec2 describe-instances --region ${env.AWS_REGION} --filters \"Name=tag:Name,Values=${env.NEXUS_INSTANCE_NAME}\" \"Name=instance-state-name,Values=running\" --query \"Reservations[0].Instances[0].PrivateIpAddress\" --output text",
+                            returnStdout: true
+                        ).trim()
+                        
+                        echo "Nexus Private IP is: ${NEXUS_IP_VAL}"
+                        sh """
+                            export AWS_DEFAULT_REGION=${env.AWS_REGION}
+
+                            # Config EKS
+                            echo "--- Connecting to Cluster ---"
+                            aws eks update-kubeconfig --name todo-application --region ${env.AWS_REGION}
+
+                            # Create Namespace
+                            kubectl create namespace ${targetEnv} || true
+
+                            # Secrets
+                            # A) DB Secret
+                            kubectl delete secret db-secret -n ${targetEnv} || true
+                            kubectl create secret generic db-secret \
+                                --from-literal=mongoDbUrl='${DB_CONN_STRING}' \
+                                -n ${targetEnv}
+
+                            # B) Nexus Secret (Using the Groovy Variable)
+                            kubectl delete secret nexus-secret -n ${targetEnv} || true
+                            kubectl create secret docker-registry nexus-secret --docker-server="${NEXUS_IP_VAL}:5000" --docker-username="\${NEX_USER}" --docker-password="\${NEX_PASS}" -n ${targetEnv}
+                            
+                            echo "--- Replacing Placeholders in YAML files ---"
+                            sed -i "s|NEXUS_IP_PLACEHOLDER|${NEXUS_IP_VAL}|g" ./k8s/${targetEnv}/3-app-deployment.yaml
+                            sed -i "s|DB_URI_PLACEHOLDER|${DB_CONN_STRING}|g" ./k8s/${targetEnv}/3-app-deployment.yaml
+                            
+                            # Apply Files
+                            echo "--- Cleaning up conflicting Secret files ---"
+                            rm -f ./k8s/${targetEnv}/2-nexus-secret.yaml
+                            rm -f ./k8s/${targetEnv}/*secret*.yaml || true
+                            
+                            echo "--- Applying Manifests ---"
+                            kubectl apply -f ./k8s/${targetEnv} -n ${targetEnv}
+                            
+                            # LoadBalancer Check
+                            echo "--- Waiting for LoadBalancer Hostname (Max 5 mins) ---"
+                            LB_HOST=""
+                            for i in \$(seq 1 30); do
+                                CURRENT_HOST=\$(kubectl get svc external-ingress-nginx-controller -n ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+                                if [ -n "\$CURRENT_HOST" ]; then
+                                    LB_HOST=\$CURRENT_HOST
+                                    echo "Found Hostname: \$LB_HOST"
+                                    break
+                                fi
+                                echo "Attempt \$i/30: Waiting 10s for AWS to provision LoadBalancer..."
+                                sleep 10
+                            done
+                            if [ -z "\$LB_HOST" ]; then
+                                echo "ERROR: LoadBalancer Hostname not assigned after 5 minutes."
+                                echo "Check AWS Console -> EC2 -> Load Balancers for issues."
+                                exit 1
+                            else
+                                echo "================================================="
+                                echo " DEPLOYMENT SUCCESSFUL!"
+                                echo " App URL: http://\$LB_HOST"
+                                echo "================================================="
+                                # curl -I --connect-timeout 5 http://\$LB_HOST || true
+                            fi
+                        """
+                    }
                 }
             }
         }
