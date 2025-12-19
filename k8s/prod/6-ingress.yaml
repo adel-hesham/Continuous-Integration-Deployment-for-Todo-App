@@ -4,17 +4,16 @@ metadata:
   name: todoapp-ingress
   namespace: prod
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
+    kubernetes.io/ingress.class: nginx
 spec:
-  ingressClassName: external-nginx
   rules:
-    - host: INGRESS_HOST_PLACEHOLDER
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: todoapp-service
-                port:
-                  number: 80
+  - host: INGRESS_HOST_PLACEHOLDER
+    http:
+      paths:
+        - backend:
+            service:
+              name: todoapp-service
+              port:
+                number: 80
+          path: /
+          pathType: Prefix
