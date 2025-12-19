@@ -14,23 +14,23 @@ spec:
     spec:
       containers:
       - name: todoapp
-        image: fatmahashem/todo-app:latest #change to nexus
+        image: "NEXUS_IP_PLACEHOLDER:5000/todo-app:latest" #change to nexus
         ports:
         - containerPort: 4000
         env:
         - name: PORT
           value: "4000"
         - name: mongoDbUrl
-          value: "mongodb+srv://ankitvis609:Sonu135790@cluster0.esi3ulq.mongodb.net/todolistDb-prod"
+          value: "DB_URI_PLACEHOLDER"
         - name: NODE_ENV
-          value: "production"
+          value: "development"
         resources:
           requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
             memory: "256Mi"
             cpu: "200m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
         livenessProbe:
           httpGet:
             path: /
@@ -43,3 +43,5 @@ spec:
             port: 4000
           initialDelaySeconds: 5
           periodSeconds: 5
+      imagePullSecrets:
+      - name: nexus-secret
