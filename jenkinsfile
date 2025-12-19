@@ -134,6 +134,7 @@ pipeline {
             steps {
                 script {
                     def targetEnv = (env.BRANCH_NAME == 'main') ? 'prod' : 'dev'
+                    def otherEnv = (targetEnv == 'prod') ? 'dev' : 'prod'
                     def INGRESS_LB_HOST = ""
                     def NEXUS_IP_VAL = ""
                     echo "=============================================="
@@ -196,6 +197,7 @@ pipeline {
                             echo "--- Cleaning up conflicting Secret files ---"
                             rm -f ./k8s/${targetEnv}/2-nexus-secret.yaml || true
                             rm -f ./k8s/${targetEnv}/*secret*.yaml || true
+                            kubectl delete ingress todoapp-ingress -n ${otherEnv} || true
                             
                             echo "--- Applying Manifests ---"
                             kubectl apply -f ./k8s/${targetEnv} -n ${targetEnv}
