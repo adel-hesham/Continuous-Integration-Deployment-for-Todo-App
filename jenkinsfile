@@ -11,11 +11,27 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'pipeline', url: 'https://github.com/adel-hesham/Continuous-Integration-Deployment-for-Todo-App.git'
+                checkout scm
+            }
+        }
+        stage('Installing dependencies') {
+            when {
+                anyOf {
+                    branch 'main'
+                    changeRequest()
+                }
+            }
+            steps {
                 sh 'npm install'
             }
         }
         stage('Build, Run & Test (Integration)') {
+            when {
+                anyOf {
+                    branch 'main'
+                    changeRequest()
+                }
+            }
             steps {
                 script{
                     def testContainer = "test-app-container"
@@ -51,6 +67,12 @@ pipeline {
             }
         }
         stage('Push Image to Nexus') {
+            when {
+                anyOf {
+                    branch 'main'
+                    changeRequest()
+                }
+            }
             steps {
                 script {
                     echo "--- Pushing Image to Nexus ---"
@@ -103,6 +125,12 @@ pipeline {
             }
         }
         stage('Deploy to EKS') {
+            when {
+                anyOf {
+                    branch 'main'
+                    changeRequest()
+                }
+            }
             steps {
                 script {
                     def targetEnv = (env.BRANCH_NAME == 'main') ? 'prod' : 'dev'
