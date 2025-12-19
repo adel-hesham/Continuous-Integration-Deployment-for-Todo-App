@@ -1,0 +1,215 @@
+pipeline {
+    agent any
+    environment {
+        AWS_REGION = "us-east-1"
+        NEXUS_INSTANCE_NAME = "nexus-repo"
+        LOCAL_IMAGE = "todo-app"
+    }
+    tools {
+        nodejs 'node20' 
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Installing dependencies') {
+            when {
+                anyOf {
+                    branch 'main'
+                    changeRequest()
+                }
+            }
+            steps {
+                sh 'npm install'
+            }
+        }
+        stage('Build, Run & Test (Integration)') {
+            when {
+                anyOf {
+                    branch 'main'
+                    changeRequest()
+                }
+            }
+            steps {
+                script{
+                    def testContainer = "test-app-container"
+                    echo "--- 1. Building Local Image ---"
+                    sh "docker build -t ${LOCAL_IMAGE} ."
+                    echo "--- 2. Starting Container (Correct ENV Name) ---"
+                    withCredentials([string(credentialsId: 'db-uri-secret', variable: 'DB_CONN_STRING')]) {
+                        try {
+                        sh """
+                                docker run -d -p 4000:4000 \
+                                -e mongoDbUrl="${DB_CONN_STRING}" \
+                                -e PORT=4000 \
+                                --name ${testContainer} ${LOCAL_IMAGE}
+                            """
+                        echo "--- Waiting for App to start (10s) ---"
+                        sh "sleep 10"
+                        def containerIP = sh(script: "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${testContainer}", returnStdout: true).trim()
+                        echo "--- App IP is: ${containerIP} ---"
+                        echo "--- 3. Testing Endpoint ---"
+                        sh "curl -f http://${containerIP}:4000 || (echo 'App Test Failed' && exit 1)"
+                        echo "App is Running & Responding!"
+                        } catch (Exception e) {
+                            echo "Integration Test Failed!"
+                            sh "docker logs ${testContainer}"
+                            currentBuild.result = 'FAILURE'
+                            error("Stopping Pipeline due to failed tests.")
+                        } finally {
+                            echo "--- Cleanup: Removing Container ---"
+                            sh "docker rm -f ${testContainer} || true" 
+                        }
+                    }
+                }
+            }
+        }
+        stage('Push Image to Nexus') {
+            when {
+                anyOf {
+                    branch 'main'
+                    changeRequest()
+                }
+            }
+            steps {
+                script {
+                    echo "--- Pushing Image to Nexus ---"
+                    withCredentials([
+                        [$class: 'AmazonWebServicesCredentialsBinding', 
+                         credentialsId: 'aws-cred', 
+                         accessKeyVariable: 'AWS_ACCESS_KEY_ID', 
+                         secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'],
+                        usernamePassword(credentialsId: 'nexus-secret', 
+                                         usernameVariable: 'NEX_USER', 
+                                         passwordVariable: 'NEX_PASS')
+                    ]) {
+                        sh """
+                            export AWS_DEFAULT_REGION=${env.AWS_REGION}
+                            
+                            echo "--- 1. Fetching TARGET ID from AWS ---"
+                            TARGET_ID=\$(aws ec2 describe-instances \
+                                --filters "Name=tag:Name,Values=${env.NEXUS_INSTANCE_NAME}" "Name=instance-state-name,Values=running" \
+                                --query "Reservations[0].Instances[0].InstanceId" --output text)
+                            echo "Targeting: \$TARGET_ID"
+                            
+                            echo "--- 2. Opening SSM Tunnel (Internal Port 5001) ---"
+                            nohup aws ssm start-session --target \$TARGET_ID \
+                                --document-name AWS-StartPortForwardingSession \
+                                --parameters '{"portNumber":["5000"],"localPortNumber":["5001"]}' > ssm_final.log 2>&1 &
+                            
+                            echo "--- 3. Starting Socat Bridge (5000 -> 5001) ---"
+                            nohup socat TCP-LISTEN:5000,fork,bind=0.0.0.0 TCP:127.0.0.1:5001 &
+                            
+                            echo "Waiting for tunnel..."
+                            sleep 15
+                            cat ssm_final.log
+                            
+                            echo "--- 3. Login, Tag & Push ---"
+                            echo \$NEX_PASS | docker login -u \$NEX_USER --password-stdin 127.0.0.1:5000
+                            
+                            echo "--- Tagging & Pushing ---"
+                            docker tag ${env.LOCAL_IMAGE} 127.0.0.1:5000/${env.LOCAL_IMAGE}
+                            docker push 127.0.0.1:5000/${env.LOCAL_IMAGE}
+                            
+                            echo "SUCCESS!!"
+                        """
+                    }
+                }
+            }
+            post {
+                always {
+                    sh "pkill -f 'aws ssm start-session' || true"
+                }
+            }
+        }
+        stage('Deploy to EKS') {
+            when {
+                anyOf {
+                    branch 'main'
+                    changeRequest()
+                }
+            }
+            steps {
+                script {
+                    def targetEnv = (env.BRANCH_NAME == 'main') ? 'prod' : 'dev'
+                    def INGRESS_LB_HOST = ""
+                    def NEXUS_IP_VAL = ""
+                    echo "=============================================="
+                    echo "    DEPLOYING TO ENVIRONMENT: ${targetEnv}    "
+                    echo "=============================================="
+                    withCredentials([
+                        [$class: 'AmazonWebServicesCredentialsBinding', 
+                            credentialsId: 'aws-cred', 
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID', 
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'],
+                        usernamePassword(credentialsId: 'nexus-secret', 
+                            usernameVariable: 'NEX_USER', 
+                            passwordVariable: 'NEX_PASS'),
+                        string(credentialsId: 'db-uri-secret', variable: 'DB_CONN_STRING')
+                    ]) {
+                        echo "--- Connecting to Cluster (Authentication) ---"
+                        sh "aws eks update-kubeconfig --name todo-application --region ${env.AWS_REGION}"
+                        
+                        echo "--- Fetching Ingress Controller LoadBalancer ---"
+                        try {
+                            INGRESS_LB_HOST = sh(
+                                script: "kubectl get svc external-ingress-nginx-controller -n ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'",
+                                returnStdout: true
+                            ).trim()
+                        } catch (Exception e) {
+                            echo " Warning: Could not fetch Ingress Host. Ensure Controller is running."
+                        }
+                        
+                        echo "Ingress Controller Host is: ${INGRESS_LB_HOST}"
+                        if (INGRESS_LB_HOST == "") {
+                            error "Error: INGRESS_LB_HOST is empty! Check 'external-ingress-nginx-controller' service in 'ingress' namespace."
+                        }
+
+                        echo "--- Fetching Nexus Private IP ---"
+                        NEXUS_IP_VAL = sh(
+                            script: "aws ec2 describe-instances --region ${env.AWS_REGION} --filters \"Name=tag:Name,Values=${env.NEXUS_INSTANCE_NAME}\" \"Name=instance-state-name,Values=running\" --query \"Reservations[0].Instances[0].PrivateIpAddress\" --output text",
+                            returnStdout: true
+                        ).trim()
+                        echo "Nexus Private IP is: ${NEXUS_IP_VAL}"
+                            
+                        sh """
+                            export AWS_DEFAULT_REGION=${env.AWS_REGION}
+
+                            # Create Namespace
+                            kubectl create namespace ${targetEnv} || true
+
+                            # Secrets Setup
+                            kubectl delete secret db-secret -n ${targetEnv} || true
+                            kubectl create secret generic db-secret --from-literal=mongoDbUrl='${DB_CONN_STRING}' -n ${targetEnv}
+
+                            kubectl delete secret nexus-secret -n ${targetEnv} || true
+                            kubectl create secret docker-registry nexus-secret --docker-server="${NEXUS_IP_VAL}:5000" --docker-username="\${NEX_USER}" --docker-password="\${NEX_PASS}" -n ${targetEnv}
+                            
+                            echo "--- Replacing Placeholders in YAML files ---"
+                            sed -i "s|NEXUS_IP_PLACEHOLDER|${NEXUS_IP_VAL}|g" ./k8s/${targetEnv}/3-app-deployment.yaml
+                            sed -i "s|DB_URI_PLACEHOLDER|${DB_CONN_STRING}|g" ./k8s/${targetEnv}/3-app-deployment.yaml
+                            sed -i 's|INGRESS_HOST_PLACEHOLDER|${INGRESS_LB_HOST}|g' ./k8s/${targetEnv}/6-ingress.yaml
+                            
+                            # Clean & Apply
+                            echo "--- Cleaning up conflicting Secret files ---"
+                            rm -f ./k8s/${targetEnv}/2-nexus-secret.yaml || true
+                            rm -f ./k8s/${targetEnv}/*secret*.yaml || true
+                            
+                            echo "--- Applying Manifests ---"
+                            kubectl apply -f ./k8s/${targetEnv} -n ${targetEnv}
+                            
+                            
+                            
+                            echo "================================================="
+                            echo " DEPLOYMENT SUCCESSFUL!"
+                            echo " App URL: http://${INGRESS_LB_HOST}"
+                            echo "================================================="
+                        """
+                    }
+                }
+            }
+        }
+    }
+}
