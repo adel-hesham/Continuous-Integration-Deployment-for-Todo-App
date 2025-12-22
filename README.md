@@ -9,6 +9,7 @@ The **Todo Application** is a Node.js-based web application designed for task ma
 * **Persistence**: Connects to a MongoDB database via the `mongoDbUrl` environment variable.
 * **Networking**: The application listens on port **4000**.
 * **High Availability**: Includes configured **Liveness** and **Readiness** probes to ensure container health.
+* **App infrastructure repo**: [infrastructure repo](https://github.com/adel-hesham/todo-app-infra) This repository includes the Terraform AWs infrastructure and Ansible nexus repo confiquration for this projejct
 
 ---
 
